@@ -1,3 +1,5 @@
+<img width="1515" height="639" alt="image" src="https://github.com/user-attachments/assets/96fbad64-23a6-4054-996f-de81b352b016" />
+
 # ComfyUI-QwenVideo
 
 A ComfyUI custom node for video analysis and prompt generation using Qwen3-VL-235B vision-language model via OpenRouter API.
