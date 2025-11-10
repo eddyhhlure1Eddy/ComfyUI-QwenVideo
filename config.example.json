@@ -1,0 +1,9 @@
+{
+  "api_key": "your-openrouter-api-key-here",
+  "model": "qwen/qwen3-vl-235b-a22b-thinking",
+  "default_num_frames": 6,
+  "default_mode": "detailed_prompt",
+  "timeout": 120,
+  "max_frames": 20,
+  "supported_formats": [".mp4", ".mov", ".avi", ".webm", ".mkv"]
+}
