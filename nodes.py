@@ -46,10 +46,9 @@ class QwenVideoPromptReversal:
     
     @classmethod
     def INPUT_TYPES(cls):
-        # Accept a VIDEO input (same behavior as Kling Lip Sync nodes)
+        # Accept VIDEO or IMAGE input
         return {
             "required": {
-                "video": ("VIDEO", {}),
                 "api_key": ("STRING", {
                     "default": "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",
                     "multiline": False,
@@ -67,6 +66,8 @@ class QwenVideoPromptReversal:
                 }),
             },
             "optional": {
+                "video": ("VIDEO", {"tooltip": "Input video for frame extraction and analysis"}),
+                "images": ("IMAGE", {"tooltip": "Input images for direct analysis (alternative to video)"}),
                 "custom_instruction": ("STRING", {
                     "default": "",
                     "multiline": True,
@@ -245,6 +246,25 @@ Format the output as a single comprehensive prompt suitable for image/video gene
             print(f"[QwenVideo] API Error Details: {error_detail}")
             raise Exception(f"API request failed: {response.status_code} - {error_detail}")
     
+    def save_images_to_temp(self, images_tensor):
+        """Save IMAGE tensor to temporary files for analysis"""
+        frames_dir = Path(self.temp_dir) / "qwen_frames" / uuid.uuid4().hex
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        
+        frame_paths = []
+        # images_tensor shape: [B, H, W, C]
+        for idx, image in enumerate(images_tensor):
+            # Convert from [0,1] float to [0,255] uint8
+            img_array = (image.cpu().numpy() * 255).astype(np.uint8)
+            img = Image.fromarray(img_array)
+            
+            output_file = frames_dir / f"frame_{idx:04d}.jpg"
+            img.save(output_file, quality=95)
+            frame_paths.append(output_file)
+        
+        print(f"[QwenVideo] Saved {len(frame_paths)} images to temp")
+        return frame_paths
+    
     def load_frames_as_tensor(self, frame_paths):
         """Load frame images as tensor for ComfyUI"""
         images = []
@@ -261,37 +281,10 @@ Format the output as a single comprehensive prompt suitable for image/video gene
             # Return empty tensor if no frames
             return torch.zeros((1, 64, 64, 3))
     
-    def analyze_video(self, video, api_key, num_frames, analysis_mode, 
-                     custom_instruction="", unique_id=None):
+    def analyze_video(self, api_key, num_frames, analysis_mode, 
+                     video=None, images=None, custom_instruction="", unique_id=None):
         """Main function called by ComfyUI"""
         try:
-            # Resolve VIDEO input to a file path (supports both VideoInput and string path)
-            resolved_path = None
-            if isinstance(video, str) and video.strip():
-                candidate = video.strip()
-                if not os.path.isabs(candidate) and FOLDER_PATHS_AVAILABLE:
-                    try:
-                        input_dir = folder_paths.get_input_directory()
-                        candidate2 = os.path.join(input_dir, candidate)
-                        if os.path.exists(candidate2):
-                            candidate = candidate2
-                    except Exception:
-                        pass
-                resolved_path = candidate
-            elif hasattr(video, "save_to"):
-                # Comfy API VideoInput: save to temp mp4 and use existing ffmpeg extractor
-                temp_dir = os.path.join(folder_paths.get_temp_directory(), "qwen_video_cache")
-                os.makedirs(temp_dir, exist_ok=True)
-                temp_name = f"qwen_video_{uuid.uuid4().hex}.mp4"
-                temp_path = os.path.join(temp_dir, temp_name)
-                try:
-                    video.save_to(temp_path)
-                    resolved_path = temp_path
-                except Exception as e:
-                    raise Exception(f"Failed to save VIDEO input to file: {e}")
-            else:
-                raise Exception("Unsupported video input type: expected VIDEO or file path string")
-            
             # Update API key if provided
             if api_key and api_key.strip():
                 self.api_key = api_key.strip()
@@ -299,14 +292,59 @@ Format the output as a single comprehensive prompt suitable for image/video gene
             else:
                 print(f"[QwenVideo] WARNING: No API key provided!")
             
-            print(f"[QwenVideo] " + "="*60)
-            print(f"[QwenVideo] Analyzing video: {resolved_path}")
-            print(f"[QwenVideo] Frames to extract: {num_frames}")
-            print(f"[QwenVideo] Analysis mode: {analysis_mode}")
-            print(f"[QwenVideo] " + "="*60)
+            # Determine input mode: video or images
+            frame_paths = []
             
-            # Extract frames
-            frame_paths = self.extract_frames(resolved_path, num_frames)
+            if images is not None:
+                # Image mode: save images to temp and use them directly
+                print(f"[QwenVideo] " + "="*60)
+                print(f"[QwenVideo] Processing images (Image Mode)")
+                print(f"[QwenVideo] Input images count: {images.shape[0]}")
+                print(f"[QwenVideo] Analysis mode: {analysis_mode}")
+                print(f"[QwenVideo] " + "="*60)
+                
+                frame_paths = self.save_images_to_temp(images)
+                
+            elif video is not None:
+                # Video mode: extract frames from video
+                # Resolve VIDEO input to a file path (supports both VideoInput and string path)
+                resolved_path = None
+                if isinstance(video, str) and video.strip():
+                    candidate = video.strip()
+                    if not os.path.isabs(candidate) and FOLDER_PATHS_AVAILABLE:
+                        try:
+                            input_dir = folder_paths.get_input_directory()
+                            candidate2 = os.path.join(input_dir, candidate)
+                            if os.path.exists(candidate2):
+                                candidate = candidate2
+                        except Exception:
+                            pass
+                    resolved_path = candidate
+                elif hasattr(video, "save_to"):
+                    # Comfy API VideoInput: save to temp mp4 and use existing ffmpeg extractor
+                    temp_dir = os.path.join(folder_paths.get_temp_directory(), "qwen_video_cache")
+                    os.makedirs(temp_dir, exist_ok=True)
+                    temp_name = f"qwen_video_{uuid.uuid4().hex}.mp4"
+                    temp_path = os.path.join(temp_dir, temp_name)
+                    try:
+                        video.save_to(temp_path)
+                        resolved_path = temp_path
+                    except Exception as e:
+                        raise Exception(f"Failed to save VIDEO input to file: {e}")
+                else:
+                    raise Exception("Unsupported video input type: expected VIDEO or file path string")
+                
+                print(f"[QwenVideo] " + "="*60)
+                print(f"[QwenVideo] Processing video (Video Mode)")
+                print(f"[QwenVideo] Analyzing video: {resolved_path}")
+                print(f"[QwenVideo] Frames to extract: {num_frames}")
+                print(f"[QwenVideo] Analysis mode: {analysis_mode}")
+                print(f"[QwenVideo] " + "="*60)
+                
+                # Extract frames
+                frame_paths = self.extract_frames(resolved_path, num_frames)
+            else:
+                raise Exception("No input provided! Please connect either a VIDEO or IMAGE input.")
             
             if not frame_paths:
                 error_msg = "Error: No frames extracted from video"
